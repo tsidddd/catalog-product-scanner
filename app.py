@@ -6,7 +6,6 @@ import requests
 
 app = FastAPI(title="Catalog Product Scanner API")
 
-# Enable CORS for phone and web clients
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -15,49 +14,69 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -------------------------------------------------------------------
-# Google Sheets Webhook Configuration
-# -------------------------------------------------------------------
 GOOGLE_SHEET_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbyNBzXCgogYweXJk6UH40hnvGe_cQ4GVjzLthLkYj0SZ4J3aUTo_W-fZ18K2JDx08s4/exec"
 
 
-# -------------------------------------------------------------------
-# Helper Functions
-# -------------------------------------------------------------------
+def sanitize_sku(raw_sku: str) -> list:
+    """
+    Generates a list of target SKU variations by stripping common finish/color codes 
+    (e.g., CHR, CP, FG, RG, MB, BN, GM, WH, BLK) so KIO-CHR-1110118 matches KIO-1110118.
+    """
+    clean = raw_sku.strip().upper()
+    variations = [clean]
+    
+    # List of common brand finish identifiers in bathware & hardware
+    finish_pattern = re.compile(r'-(CHR|CP|FG|RG|MB|BN|GM|WH|BLK|CH|S8|FG32|58)-', re.IGNORECASE)
+    
+    # Strip finish identifier from middle of SKU
+    stripped_mid = finish_pattern.sub('-', clean)
+    if stripped_mid not in variations:
+        variations.append(stripped_mid)
+        
+    # Strip finish identifier if appended at end (e.g., AEC-1111N-CHR -> AEC-1111N)
+    stripped_end = re.sub(r'-(CHR|CP|FG|RG|MB|BN|GM|WH|BLK|CH)$', '', clean, flags=re.IGNORECASE)
+    if stripped_end not in variations:
+        variations.append(stripped_end)
+
+    return variations
+
+
 def query_db_sku(clean_sku: str):
-    """
-    Queries SQLite for a product SKU.
-    Prioritizes EXACT matches first.
-    """
     conn = sqlite3.connect("master_products.db")
     cursor = conn.cursor()
 
-    # 1. Exact SKU Match
-    cursor.execute("""
-        SELECT brand, category, sku_cat_no, mrp_inr, description, page_no, source_file 
-        FROM products 
-        WHERE UPPER(sku_cat_no) = ?
-    """, (clean_sku,))
-    results = cursor.fetchall()
+    sku_candidates = sanitize_sku(clean_sku)
+    results = []
 
-    # 2. Wildcard Search Fallback
-    if not results:
+    # 1. Try exact matches for all candidates (original and stripped variations)
+    for candidate in sku_candidates:
         cursor.execute("""
             SELECT brand, category, sku_cat_no, mrp_inr, description, page_no, source_file 
             FROM products 
-            WHERE UPPER(sku_cat_no) LIKE ?
-            LIMIT 1
-        """, (f"%{clean_sku}%",))
+            WHERE UPPER(sku_cat_no) = ?
+        """, (candidate,))
         results = cursor.fetchall()
+        if results:
+            break
+
+    # 2. Wildcard fallback if exact candidate search returns empty
+    if not results:
+        for candidate in sku_candidates:
+            cursor.execute("""
+                SELECT brand, category, sku_cat_no, mrp_inr, description, page_no, source_file 
+                FROM products 
+                WHERE UPPER(sku_cat_no) LIKE ?
+                LIMIT 1
+            """, (f"%{candidate}%",))
+            results = cursor.fetchall()
+            if results:
+                break
 
     conn.close()
     return results
 
 
 def log_to_google_sheet(brand: str, category: str, sku: str, mrp: str, desc: str, scan_type: str):
-    """
-    Posts scanned metadata to Google Sheets via Webhook.
-    """
     if "YOUR_COPIED" not in GOOGLE_SHEET_WEBHOOK_URL and GOOGLE_SHEET_WEBHOOK_URL.startswith("http"):
         try:
             payload = {
@@ -74,9 +93,6 @@ def log_to_google_sheet(brand: str, category: str, sku: str, mrp: str, desc: str
 
 
 def clean_description(desc_raw: str) -> str:
-    """
-    Cleans footer noise from catalog descriptions.
-    """
     if not desc_raw:
         return ""
     cleaned = re.sub(r'esscobathware\.com\s*\|\s*\d+', '', desc_raw, flags=re.IGNORECASE)
@@ -84,9 +100,6 @@ def clean_description(desc_raw: str) -> str:
     return cleaned
 
 
-# -------------------------------------------------------------------
-# Endpoints
-# -------------------------------------------------------------------
 @app.get("/")
 def home():
     return {
@@ -98,8 +111,7 @@ def home():
 
 @app.get("/scan")
 def scan_text_sku(sku: str = Query(..., description="Target SKU or Cat. No.")):
-    clean_sku = sku.strip().upper()
-    results = query_db_sku(clean_sku)
+    results = query_db_sku(sku)
 
     if results:
         r = results[0]
@@ -111,7 +123,6 @@ def scan_text_sku(sku: str = Query(..., description="Target SKU or Cat. No.")):
         page_num = r[5]
         source_cat = r[6]
 
-        # Log single match to Google Sheet
         log_to_google_sheet(
             brand=brand_name,
             category=cat_name,
@@ -123,6 +134,8 @@ def scan_text_sku(sku: str = Query(..., description="Target SKU or Cat. No.")):
 
         return {
             "status": "success",
+            "searched_sku": sku,
+            "matched_sku": sku_code,
             "products": [{
                 "brand": brand_name,
                 "category": cat_name,
