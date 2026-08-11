@@ -11,11 +11,12 @@
         h2 { color: #38bdf8; margin-top: 0; }
         .btn { display: inline-block; width: 100%; padding: 14px; font-size: 16px; font-weight: bold; color: white; background: #0284c7; border: none; border-radius: 8px; margin: 6px 0; cursor: pointer; box-sizing: border-box; }
         .btn-green { background: #16a34a; }
-        .btn-orange { background: #ea580c; }
+        .btn-purple { background: #8b5cf6; }
+        input[type="file"] { display: none; }
         
-        .video-box { position: relative; width: 100%; height: 280px; border-radius: 12px; overflow: hidden; background: #000; margin-top: 10px; display: none; }
+        .video-box { position: relative; width: 100%; height: 260px; border-radius: 12px; overflow: hidden; background: #000; margin-top: 10px; display: none; }
         video { width: 100%; height: 100%; object-fit: cover; }
-        .focus-frame { position: absolute; top: 20%; left: 10%; right: 10%; bottom: 20%; border: 2px dashed #38bdf8; border-radius: 8px; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.4); pointer-events: none; }
+        .focus-frame { position: absolute; top: 25%; left: 10%; right: 10%; bottom: 25%; border: 2px dashed #38bdf8; border-radius: 8px; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5); pointer-events: none; }
         canvas { display: none; }
         
         .result-card { background: #0f172a; border-left: 6px solid #16a34a; padding: 15px; text-align: left; margin-top: 15px; border-radius: 8px; }
@@ -28,15 +29,20 @@
 <div class="card-box">
     <h2>Catalog Product Scanner</h2>
     
+    <label class="btn btn-purple">
+        📸 Snap High-Res Photo (Native Camera)
+        <input type="file" accept="image/*" capture="environment" id="fileInput" onchange="processUploadedPhoto()">
+    </label>
+
+    <button id="camBtn" class="btn btn-green" onclick="startLiveCamera()">🎥 Start Live Viewfinder</button>
+
     <div class="video-box" id="videoBox">
         <video id="webcam" autoplay playsinline></video>
         <div class="focus-frame"></div>
     </div>
-    <canvas id="canvas"></canvas>
+    <button id="snapBtn" class="btn" style="display:none; background:#ea580c;" onclick="captureLiveStream()">🔍 Read Live Frame</button>
 
-    <button id="camBtn" class="btn btn-green" onclick="startHDCamera()">📷 Start HD Camera</button>
-    <button id="snapBtn" class="btn btn-orange" onclick="captureAndEnhance()" style="display:none;">🔍 Snap & Read High-Res Label</button>
-    <button id="torchBtn" class="btn" onclick="toggleTorch()" style="display:none; background:#64748b;">💡 Toggle Flashlight</button>
+    <canvas id="canvas"></canvas>
 
     <p style="margin: 15px 0; color: #94a3b8;">— OR MANUAL SKU LOOKUP —</p>
 
@@ -47,177 +53,117 @@
 </div>
 
 <script>
-const BACKEND_URL = "https://catalog-scanner-api.onrender.com"; // Your Render live URL
-let videoTrack = null;
+const BACKEND_URL = "https://catalog-scanner-api.onrender.com"; // Your Render live backend URL
 
-async function startHDCamera() {
+// -------------------------------------------------------------
+// 1. Native High-Res Photo Processing (Best Quality)
+// -------------------------------------------------------------
+async function processUploadedPhoto() {
+    const input = document.getElementById('fileInput');
+    if (!input.files || !input.files[0]) return;
+
+    const outputDiv = document.getElementById('output');
+    outputDiv.innerHTML = "<p style='color:#38bdf8;'>Processing native high-res photo...</p>";
+
+    const img = new Image();
+    img.src = URL.createObjectURL(input.files[0]);
+    img.onload = async () => {
+        const canvas = document.getElementById('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+
+        // Enhance text contrast
+        enhanceCanvas(ctx, canvas.width, canvas.height);
+
+        outputDiv.innerHTML = "<p style='color:#38bdf8;'>Running OCR on crisp image...</p>";
+        runOcrAndSearch(canvas);
+    };
+}
+
+// -------------------------------------------------------------
+// 2. Forced Full HD Live Camera Stream
+// -------------------------------------------------------------
+async function startLiveCamera() {
     const video = document.getElementById('webcam');
     const videoBox = document.getElementById('videoBox');
     const camBtn = document.getElementById('camBtn');
     const snapBtn = document.getElementById('snapBtn');
-    const torchBtn = document.getElementById('torchBtn');
     const outputDiv = document.getElementById('output');
 
     try {
-        // Request High Definition (1080p) stream with continuous focus
+        // Enforce 1080p Full HD resolution constraints
         const stream = await navigator.mediaDevices.getUserMedia({
             video: {
-                facingMode: { exact: "environment" },
-                width: { ideal: 1920 },
-                height: { ideal: 1080 },
-                focusMode: { ideal: "continuous" }
+                facingMode: { ideal: "environment" },
+                width: { min: 1280, ideal: 1920 },
+                height: { min: 720, ideal: 1080 }
             }
-        }).catch(() => {
-            // Fallback for devices without dual rear cameras
-            return navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
         });
 
         video.srcObject = stream;
-        videoTrack = stream.getVideoTracks()[0];
-
         videoBox.style.display = "block";
         camBtn.style.display = "none";
         snapBtn.style.display = "block";
-        torchBtn.style.display = "block";
-
-        outputDiv.innerHTML = "<p style='color:#38bdf8;'>Align SKU code inside the dashed frame and tap Snap.</p>";
+        outputDiv.innerHTML = "<p style='color:#38bdf8;'>Align SKU code inside dashed line and tap Read Live Frame.</p>";
     } catch (err) {
-        outputDiv.innerHTML = "<p style='color:#f87171;'>Camera access denied or high-res video unsupported.</p>";
+        outputDiv.innerHTML = "<p style='color:#f87171;'>Live camera access error. Please use the 'Snap High-Res Photo' button above.</p>";
     }
 }
 
-async function toggleTorch() {
-    if (videoTrack && videoTrack.getCapabilities().torch) {
-        const currentSetting = videoTrack.getSettings().torch;
-        await videoTrack.applyConstraints({
-            advanced: [{ torch: !currentSetting }]
-        });
-    } else {
-        alert("Flashlight/Torch controls not supported by this browser sensor.");
-    }
-}
-
-async function captureAndEnhance() {
+function captureLiveStream() {
     const video = document.getElementById('webcam');
     const canvas = document.getElementById('canvas');
-    const outputDiv = document.getElementById('output');
-
-    outputDiv.innerHTML = "<p style='color:#38bdf8;'>Processing high-res image & enhancing text contrast...</p>";
-
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext('2d');
     
-    // 1. Draw raw video frame onto canvas
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
+    const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    // 2. Pre-process Image: Convert to high-contrast Grayscale
-    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    enhanceCanvas(ctx, canvas.width, canvas.height);
+    runOcrAndSearch(canvas);
+}
+
+// -------------------------------------------------------------
+// Helper: High-Contrast Black & White Image Processing
+// -------------------------------------------------------------
+function enhanceCanvas(ctx, width, height) {
+    const imgData = ctx.getImageData(0, 0, width, height);
     const d = imgData.data;
     for (let i = 0; i < d.length; i += 4) {
-        let v = (d[i] * 0.2126 + d[i+1] * 0.7152 + d[i+2] * 0.0722);
-        // Simple Thresholding for crisp text
-        v = v > 120 ? 255 : 0;
+        let v = (d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114);
+        v = v > 110 ? 255 : 0; // High-contrast binarization
         d[i] = d[i+1] = d[i+2] = v;
     }
     ctx.putImageData(imgData, 0, 0);
-
-    // 3. Run In-Browser OCR on enhanced image
-    const worker = await Tesseract.createWorker('eng');
-    const ret = await worker.recognize(canvas);
-    await worker.terminate();
-
-    const ocrText = ret.data.text;
-    
-    // Extract candidate SKUs
-    const skuPattern = /\b([A-Z0-9]{2,5}-[A-Z0-9-]{3,18}|[SFEABSP][0-9]{7,8}[A-Z0-9]*)\b/gi;
-    const matches = ocrText.match(skuPattern);
-
-    if (matches && matches.length > 0) {
-        const detectedSku = matches[0].trim().toUpperCase();
-        outputDiv.innerHTML = `<p style='color:#4ade80;'>Detected Code: <strong>${detectedSku}</strong>. Fetching pricing...</p>`;
-        queryBackend(detectedSku);
-    } else {
-        outputDiv.innerHTML = "<p style='color:#f87171;'>Could not read code clearly. Turn on Flashlight or hold closer.</p>";
-    }
 }
 
-async function searchManual() {
-    const sku = document.getElementById('manualSku').value;
-    if (!sku) return;
-    queryBackend(sku.trim().toUpperCase());
-}
-
-async function queryBackend(skuQuery) {
+// -------------------------------------------------------------
+// Helper: OCR Engine & Backend Query
+// -------------------------------------------------------------
+async function runOcrAndSearch(canvas) {
     const outputDiv = document.getElementById('output');
     try {
-        const res = await fetch(`${BACKEND_URL}/scan?sku=${encodeURIComponent(skuQuery)}`);
-        if (!res.ok) throw new Error("Not Found");
-        const data = await res.json();
-        renderResult(data);
-    } catch (e) {
-        outputDiv.innerHTML = `<p style='color:#f87171;'>Product SKU '${skuQuery}' not found in database.</p>`;
-    }
-}
+        const worker = await Tesseract.createWorker('eng');
+        const ret = await worker.recognize(canvas);
+        await worker.terminate();
 
-function renderResult(data) {
-    const outputDiv = document.getElementById('output');
-    if (data.status === "success" && data.products.length > 0) {
-        const p = data.products[0];
-        outputDiv.innerHTML = `
-            <div class="result-card">
-                <div>
-                    <span class="badge">${p.brand}</span>
-                    <span class="badge">${p.category}</span>
-                </div>
-                <h3 style="margin: 8px 0; color:#38bdf8;">SKU: ${p.sku_cat_no}</h3>
-                <div class="price-tag">MRP: ${p.mrp_inr}</div>
-                <p style="color:#cbd5e1;"><strong>Specs:</strong> ${p.description}</p>
-                <small style="color:#64748b;">Source: ${p.source_catalog} (Page ${p.page_no})</small><br>
-                <p style="color:#4ade80; font-size:12px; font-weight:bold; margin-top:8px;">✅ Logged to Google Sheet</p>
-            </div>
-        `;
-    }
-}
-</script>
+        const ocrText = ret.data.text;
+        
+        // Regex pattern for SKUs (e.g. AEC-1111N, S1013265VS, F1021451FG)
+        const skuPattern = /\b([A-Z0-9]{2,5}-[A-Z0-9-]{3,18}|[SFEABSP][0-9]{7,8}[A-Z0-9]*)\b/gi;
+        const matches = ocrText.match(skuPattern);
 
-</body>
-</html>
-    <p style="margin: 15px 0; color: #94a3b8;">— OR MANUAL SKU LOOKUP —</p>
-
-    <input type="text" id="manualSku" placeholder="Type SKU (e.g. AEC-1111N, S1013265)" style="width: 100%; padding: 12px; font-size: 16px; border: 1px solid #334155; background: #0f172a; color: white; border-radius: 8px; box-sizing: border-box;">
-    <button class="btn" onclick="searchManual()">Search Code</button>
-
-    <div id="output"></div>
-</div>
-
-<script>
-const BACKEND_URL = "https://catalog-scanner-api.onrender.com"; // Replace with your Render URL
-let codeReader = null;
-
-async function startScanner() {
-    const videoBox = document.getElementById('videoBox');
-    const camBtn = document.getElementById('camBtn');
-    const outputDiv = document.getElementById('output');
-
-    videoBox.style.display = "block";
-    camBtn.style.display = "none";
-    outputDiv.innerHTML = "<p style='color:#38bdf8;'>Align product barcode or label inside the laser line...</p>";
-
-    codeReader = new ZXing.BrowserMultiFormatReader();
-    try {
-        const videoInputDevices = await codeReader.listVideoInputDevices();
-        const selectedDeviceId = videoInputDevices.length > 1 ? videoInputDevices[1].deviceId : videoInputDevices[0].deviceId;
-
-        codeReader.decodeFromVideoDevice(selectedDeviceId, 'video', (result, err) => {
-            if (result) {
-                const scannedText = result.text.trim().toUpperCase();
-                outputDiv.innerHTML = `<p style='color:#4ade80;'>Scanned Code: <strong>${scannedText}</strong>. Searching database...</p>`;
-                queryBackend(scannedText);
-            }
-        });
+        if (matches && matches.length > 0) {
+            const detectedSku = matches[0].trim().toUpperCase();
+            outputDiv.innerHTML = `<p style='color:#4ade80;'>Detected SKU: <strong>${detectedSku}</strong>. Fetching product...</p>`;
+            queryBackend(detectedSku);
+        } else {
+            outputDiv.innerHTML = "<p style='color:#f87171;'>No SKU code detected. Hold camera closer to the printed tag or tap 'Snap High-Res Photo'.</p>";
+        }
     } catch (err) {
-        outputDiv.innerHTML = "<p style='color:#f87171;'>Camera permission required or camera busy.</p>";
+        outputDiv.innerHTML = "<p style='color:#f87171;'>OCR Processing failed. Try manual typing.</p>";
     }
 }
 
@@ -253,7 +199,7 @@ function renderResult(data) {
                 <div class="price-tag">MRP: ${p.mrp_inr}</div>
                 <p style="color:#cbd5e1;"><strong>Specs:</strong> ${p.description}</p>
                 <small style="color:#64748b;">Source: ${p.source_catalog} (Page ${p.page_no})</small><br>
-                <p style="color:#4ade80; font-size:12px; font-weight:bold; margin-top:8px;">✅ Logged to Google Sheet</p>
+                <p style="color:#4ade80; font-size:12px; font-weight:bold; margin-top:8px;">✅ Automatically Logged to Google Sheet</p>
             </div>
         `;
     }
