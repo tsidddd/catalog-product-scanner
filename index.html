@@ -8,16 +8,14 @@
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: white; margin: 0; padding: 15px; text-align: center; }
         .card-box { max-width: 480px; margin: 0 auto; background: #1e293b; padding: 20px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
-        h2 { color: #38bdf8; margin-top: 0; }
+        h2 { color: #38bdf8; margin-top: 0; margin-bottom: 15px; }
         .btn { display: inline-block; width: 100%; padding: 14px; font-size: 16px; font-weight: bold; color: white; background: #0284c7; border: none; border-radius: 8px; margin: 6px 0; cursor: pointer; box-sizing: border-box; }
-        .btn-green { background: #16a34a; }
         .btn-purple { background: #8b5cf6; }
         input[type="file"] { display: none; }
-        
-        .video-box { position: relative; width: 100%; height: 260px; border-radius: 12px; overflow: hidden; background: #000; margin-top: 10px; display: none; }
-        video { width: 100%; height: 100%; object-fit: cover; }
-        .focus-frame { position: absolute; top: 25%; left: 10%; right: 10%; bottom: 25%; border: 2px dashed #38bdf8; border-radius: 8px; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5); pointer-events: none; }
         canvas { display: none; }
+        
+        .divider { margin: 20px 0 15px 0; border-bottom: 1px solid #334155; position: relative; }
+        .divider span { background: #1e293b; padding: 0 10px; color: #94a3b8; font-size: 13px; font-weight: bold; position: relative; top: -10px; }
         
         .result-card { background: #0f172a; border-left: 6px solid #16a34a; padding: 15px; text-align: left; margin-top: 15px; border-radius: 8px; }
         .price-tag { font-size: 24px; color: #4ade80; font-weight: bold; margin: 5px 0; }
@@ -30,23 +28,17 @@
     <h2>Catalog Product Scanner</h2>
     
     <label class="btn btn-purple">
-        📸 Snap High-Res Photo (Native Camera)
+        📸 Snap Label (Native Camera)
         <input type="file" accept="image/*" capture="environment" id="fileInput" onchange="processUploadedPhoto()">
     </label>
 
-    <button id="camBtn" class="btn btn-green" onclick="startLiveCamera()">🎥 Start Live Viewfinder</button>
-
-    <div class="video-box" id="videoBox">
-        <video id="webcam" autoplay playsinline></video>
-        <div class="focus-frame"></div>
-    </div>
-    <button id="snapBtn" class="btn" style="display:none; background:#ea580c;" onclick="captureLiveStream()">🔍 Read Live Frame</button>
-
     <canvas id="canvas"></canvas>
 
-    <p style="margin: 15px 0; color: #94a3b8;">— OR MANUAL SKU LOOKUP —</p>
+    <div class="divider">
+        <span>OR MANUAL SKU LOOKUP</span>
+    </div>
 
-    <input type="text" id="manualSku" placeholder="Type SKU (e.g. AEC-1111N, S1013265)" style="width: 100%; padding: 12px; font-size: 16px; border: 1px solid #334155; background: #0f172a; color: white; border-radius: 8px; box-sizing: border-box;">
+    <input type="text" id="manualSku" placeholder="Type SKU (e.g. AEC-1111N, KIO-CHR-1110118)" style="width: 100%; padding: 12px; font-size: 16px; border: 1px solid #334155; background: #0f172a; color: white; border-radius: 8px; box-sizing: border-box;">
     <button class="btn" onclick="searchManual()">Search Code</button>
 
     <div id="output"></div>
@@ -55,15 +47,12 @@
 <script>
 const BACKEND_URL = "https://catalog-scanner-api.onrender.com"; // Your Render live backend URL
 
-// -------------------------------------------------------------
-// 1. Native High-Res Photo Processing (Best Quality)
-// -------------------------------------------------------------
 async function processUploadedPhoto() {
     const input = document.getElementById('fileInput');
     if (!input.files || !input.files[0]) return;
 
     const outputDiv = document.getElementById('output');
-    outputDiv.innerHTML = "<p style='color:#38bdf8;'>Processing native high-res photo...</p>";
+    outputDiv.innerHTML = "<p style='color:#38bdf8;'>Processing high-res photo...</p>";
 
     const img = new Image();
     img.src = URL.createObjectURL(input.files[0]);
@@ -74,74 +63,24 @@ async function processUploadedPhoto() {
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0);
 
-        // Enhance text contrast
         enhanceCanvas(ctx, canvas.width, canvas.height);
 
-        outputDiv.innerHTML = "<p style='color:#38bdf8;'>Running OCR on crisp image...</p>";
+        outputDiv.innerHTML = "<p style='color:#38bdf8;'>Running OCR scan...</p>";
         runOcrAndSearch(canvas);
     };
 }
 
-// -------------------------------------------------------------
-// 2. Forced Full HD Live Camera Stream
-// -------------------------------------------------------------
-async function startLiveCamera() {
-    const video = document.getElementById('webcam');
-    const videoBox = document.getElementById('videoBox');
-    const camBtn = document.getElementById('camBtn');
-    const snapBtn = document.getElementById('snapBtn');
-    const outputDiv = document.getElementById('output');
-
-    try {
-        // Enforce 1080p Full HD resolution constraints
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-                facingMode: { ideal: "environment" },
-                width: { min: 1280, ideal: 1920 },
-                height: { min: 720, ideal: 1080 }
-            }
-        });
-
-        video.srcObject = stream;
-        videoBox.style.display = "block";
-        camBtn.style.display = "none";
-        snapBtn.style.display = "block";
-        outputDiv.innerHTML = "<p style='color:#38bdf8;'>Align SKU code inside dashed line and tap Read Live Frame.</p>";
-    } catch (err) {
-        outputDiv.innerHTML = "<p style='color:#f87171;'>Live camera access error. Please use the 'Snap High-Res Photo' button above.</p>";
-    }
-}
-
-function captureLiveStream() {
-    const video = document.getElementById('webcam');
-    const canvas = document.getElementById('canvas');
-    
-    canvas.width = video.videoWidth || 1280;
-    canvas.height = video.videoHeight || 720;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-    enhanceCanvas(ctx, canvas.width, canvas.height);
-    runOcrAndSearch(canvas);
-}
-
-// -------------------------------------------------------------
-// Helper: High-Contrast Black & White Image Processing
-// -------------------------------------------------------------
 function enhanceCanvas(ctx, width, height) {
     const imgData = ctx.getImageData(0, 0, width, height);
     const d = imgData.data;
     for (let i = 0; i < d.length; i += 4) {
         let v = (d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114);
-        v = v > 110 ? 255 : 0; // High-contrast binarization
+        v = v > 110 ? 255 : 0;
         d[i] = d[i+1] = d[i+2] = v;
     }
     ctx.putImageData(imgData, 0, 0);
 }
 
-// -------------------------------------------------------------
-// Helper: OCR Engine & Backend Query
-// -------------------------------------------------------------
 async function runOcrAndSearch(canvas) {
     const outputDiv = document.getElementById('output');
     try {
@@ -151,19 +90,19 @@ async function runOcrAndSearch(canvas) {
 
         const ocrText = ret.data.text;
         
-        // Regex pattern for SKUs (e.g. AEC-1111N, S1013265VS, F1021451FG)
+        // Match SKUs including finish codes like KIO-CHR-1110118 or AEC-1111N
         const skuPattern = /\b([A-Z0-9]{2,5}-[A-Z0-9-]{3,18}|[SFEABSP][0-9]{7,8}[A-Z0-9]*)\b/gi;
         const matches = ocrText.match(skuPattern);
 
         if (matches && matches.length > 0) {
             const detectedSku = matches[0].trim().toUpperCase();
-            outputDiv.innerHTML = `<p style='color:#4ade80;'>Detected SKU: <strong>${detectedSku}</strong>. Fetching product...</p>`;
+            outputDiv.innerHTML = `<p style='color:#4ade80;'>Detected: <strong>${detectedSku}</strong>. Querying database...</p>`;
             queryBackend(detectedSku);
         } else {
-            outputDiv.innerHTML = "<p style='color:#f87171;'>No SKU code detected. Hold camera closer to the printed tag or tap 'Snap High-Res Photo'.</p>";
+            outputDiv.innerHTML = "<p style='color:#f87171;'>No SKU code detected. Hold camera closer to the printed tag.</p>";
         }
     } catch (err) {
-        outputDiv.innerHTML = "<p style='color:#f87171;'>OCR Processing failed. Try manual typing.</p>";
+        outputDiv.innerHTML = "<p style='color:#f87171;'>OCR processing failed. Try manual typing below.</p>";
     }
 }
 
