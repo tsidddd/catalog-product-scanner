@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Catalog Product Camera Scanner</title>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f4f8; margin: 0; padding: 15px; text-align: center; }
+        .card-box { max-width: 480px; margin: 0 auto; background: white; padding: 20px; border-radius: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); }
+        h2 { color: #0f2c59; margin-top: 0; }
+        .btn { display: inline-block; width: 100%; padding: 14px; font-size: 16px; font-weight: bold; color: white; background: #164863; border: none; border-radius: 8px; margin: 8px 0; cursor: pointer; box-sizing: border-box; }
+        .btn-green { background: #27ae60; }
+        input[type="file"] { display: none; }
+        video { width: 100%; border-radius: 8px; background: #000; margin-top: 10px; display: none; }
+        canvas { display: none; }
+        .result-card { background: #f8fafc; border-left: 6px solid #27ae60; padding: 15px; text-align: left; margin-top: 15px; border-radius: 8px; }
+        .price-tag { font-size: 24px; color: #27ae60; font-weight: bold; margin: 5px 0; }
+        .category-badge { background: #164863; color: white; font-size: 11px; font-weight: bold; padding: 3px 8px; border-radius: 4px; display: inline-block; margin-bottom: 6px; }
+        .brand-badge { background: #0f2c59; color: white; font-size: 11px; font-weight: bold; padding: 3px 8px; border-radius: 4px; display: inline-block; margin-bottom: 6px; }
+        .sheet-badge { background: #e8f5e9; color: #2e7d32; font-size: 12px; font-weight: bold; padding: 4px 8px; border-radius: 4px; display: inline-block; margin-top: 8px; }
+    </style>
+</head>
+<body>
+
+<div class="card-box">
+    <h2>Catalog Product Scanner</h2>
+    
+    <video id="webcam" autoplay playsinline></video>
+    <canvas id="canvas"></canvas>
+
+    <button id="camBtn" class="btn btn-green" onclick="startCamera()">📷 Open Camera & Scan</button>
+    <button id="snapBtn" class="btn" onclick="captureAndScan()" style="display:none; background:#e67e22;">🔍 Read Label & Search</button>
+
+    <p style="margin: 10px 0; color: #777;">— OR SEARCH MANUALLY —</p>
+
+    <input type="text" id="manualSku" placeholder="Type SKU (e.g. AEC-1111N, S1013265)" style="width: 100%; padding: 12px; font-size: 16px; border: 1px solid #ccc; border-radius: 8px; box-sizing: border-box;">
+    <button class="btn" onclick="searchManual()">Search SKU</button>
+
+    <div id="output"></div>
+</div>
+
+<script>
+// Replace with your Render URL (e.g. https://catalog-scanner-api.onrender.com)
+const BACKEND_URL = "https://catalog-scanner-api.onrender.com"; 
+
+let videoStream = null;
+
+async function startCamera() {
+    const video = document.getElementById('webcam');
+    const camBtn = document.getElementById('camBtn');
+    const snapBtn = document.getElementById('snapBtn');
+
+    try {
+        videoStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "environment" }
+        });
+        video.srcObject = videoStream;
+        video.style.display = "block";
+        camBtn.style.display = "none";
+        snapBtn.style.display = "block";
+    } catch (err) {
+        alert("Camera permission denied or camera not available.");
+    }
+}
+
+async function captureAndScan() {
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('canvas');
+    const outputDiv = document.getElementById('output');
+
+    outputDiv.innerHTML = "<p>Reading image text via OCR...</p>";
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    // Run Tesseract OCR directly inside the browser
+    const worker = await Tesseract.createWorker('eng');
+    const ret = await worker.recognize(canvas);
+    await worker.terminate();
+
+    const ocrText = ret.data.text;
+    
+    // Extract candidate SKUs
+    const skuPattern = /\b([A-Z0-9]{2,5}-[A-Z0-9-]{3,18}|[SFEABSP][0-9]{7,8}[A-Z0-9]*)\b/gi;
+    const matches = ocrText.match(skuPattern);
+
+    if (matches && matches.length > 0) {
+        const detectedSku = matches[0].trim().toUpperCase();
+        outputDiv.innerHTML = `<p>Found SKU: <strong>${detectedSku}</strong>. Querying database...</p>`;
+        queryBackend(detectedSku);
+    } else {
+        outputDiv.innerHTML = "<p style='color:red;'>No SKU pattern detected in frame. Align label and try again.</p>";
+    }
+}
+
+async function searchManual() {
+    const sku = document.getElementById('manualSku').value;
+    if (!sku) return;
+    queryBackend(sku.trim().toUpperCase());
+}
+
+async function queryBackend(skuQuery) {
+    const outputDiv = document.getElementById('output');
+    try {
+        const res = await fetch(`${BACKEND_URL}/scan?sku=${encodeURIComponent(skuQuery)}`);
+        if (!res.ok) throw new Error("Item not found");
+        const data = await res.json();
+        renderResult(data);
+    } catch (e) {
+        outputDiv.innerHTML = `<p style='color:red;'>Product SKU '${skuQuery}' not found in database.</p>`;
+    }
+}
+
+function renderResult(data) {
+    const outputDiv = document.getElementById('output');
+    if (data.status === "success" && data.products.length > 0) {
+        const p = data.products[0];
+        outputDiv.innerHTML = `
+            <div class="result-card">
+                <div>
+                    <span class="brand-badge">${p.brand}</span>
+                    <span class="category-badge">${p.category}</span>
+                </div>
+                <h3 style="margin: 5px 0;">SKU: ${p.sku_cat_no}</h3>
+                <div class="price-tag">MRP: ${p.mrp_inr}</div>
+                <p><strong>Description:</strong> ${p.description}</p>
+                <small>Source: ${p.source_catalog} (Page ${p.page_no})</small><br>
+                <span class="sheet-badge">✅ Automatically Logged to Google Sheet</span>
+            </div>
+        `;
+    }
+}
+</script>
+
+</body>
+</html>
