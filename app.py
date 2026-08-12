@@ -1,10 +1,11 @@
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import sqlite3
+import psycopg2
 import re
 import requests
+import os
 
-app = FastAPI(title="Catalog Product Scanner API")
+app = FastAPI(title="Master Catalog Product Scanner API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,57 +15,76 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Connect to PostgreSQL (Render DATABASE_URL environment variable or local pgAdmin)
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:Siddhartha@01@localhost:5432/catalog_db")
 GOOGLE_SHEET_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbyNyyly5-3rn7X9zz5BEKvPgF4GeJ8yzCZjSVAwvIGa0Ziiibi3nEuSe0ywy18vUGni/exec"
 
-
-def query_db_sku_variants(raw_sku: str):
-    conn = sqlite3.connect("master_products.db")
+def query_master_catalog(raw_sku: str):
+    conn = psycopg2.connect(DATABASE_URL)
     cursor = conn.cursor()
 
     clean = raw_sku.strip().upper()
-    # Strip middle finish code to get base model (e.g. KIO-CHR-1110118 -> KIO-1110118)
     base_model = re.sub(r'-(CHR|CP|FG|RG|MB|BN|GM|WH|BLK|CH)-', '-', clean)
     digits_only = re.sub(r'[^0-9]', '', clean)
 
-    # 1. Search all variants sharing the same base model
+    # High-Performance JOIN query across Brands, Categories, and Series
     cursor.execute("""
-        SELECT brand, category, sku_cat_no, finish_code, finish_name, mrp_inr, description, page_no, source_file 
-        FROM products 
-        WHERE UPPER(base_model_code) = ? OR UPPER(sku_cat_no) = ? OR UPPER(sku_cat_no) = ?
-        ORDER BY mrp_inr ASC
-    """, (base_model, clean, base_model))
+        SELECT 
+            b.brand_name,
+            c.category_name,
+            s.series_name,
+            p.sku_cat_no,
+            p.finish_code,
+            p.finish_name,
+            p.mrp_inr,
+            p.description,
+            p.page_no,
+            p.source_file
+        FROM products p
+        JOIN brands b ON p.brand_id = b.brand_id
+        JOIN categories c ON p.category_id = c.category_id
+        LEFT JOIN series s ON p.series_id = s.series_id
+        WHERE UPPER(p.sku_cat_no) = %s 
+           OR UPPER(p.base_model_code) = %s 
+           OR %s = ANY(p.search_variations)
+        ORDER BY p.mrp_inr ASC
+    """, (clean, base_model, clean))
+    
     results = cursor.fetchall()
 
-    # 2. Substring fallback if exact base model is not found
-    if not results:
-        cursor.execute("""
-            SELECT brand, category, sku_cat_no, finish_code, finish_name, mrp_inr, description, page_no, source_file 
-            FROM products 
-            WHERE UPPER(sku_cat_no) LIKE ? OR UPPER(base_model_code) LIKE ?
-            ORDER BY mrp_inr ASC
-        """, (f"%{base_model}%", f"%{base_model}%"))
-        results = cursor.fetchall()
-
-    # 3. Digits fallback (e.g., matching 1110118)
+    # Digits-only fallback
     if not results and len(digits_only) >= 5:
         cursor.execute("""
-            SELECT brand, category, sku_cat_no, finish_code, finish_name, mrp_inr, description, page_no, source_file 
-            FROM products 
-            WHERE REPLACE(UPPER(sku_cat_no), '-', '') LIKE ?
-            ORDER BY mrp_inr ASC
-        """, (f"%{digits_only}%",))
+            SELECT 
+                b.brand_name,
+                c.category_name,
+                s.series_name,
+                p.sku_cat_no,
+                p.finish_code,
+                p.finish_name,
+                p.mrp_inr,
+                p.description,
+                p.page_no,
+                p.source_file
+            FROM products p
+            JOIN brands b ON p.brand_id = b.brand_id
+            JOIN categories c ON p.category_id = c.category_id
+            LEFT JOIN series s ON p.series_id = s.series_id
+            WHERE %s = ANY(p.search_variations)
+            ORDER BY p.mrp_inr ASC
+        """, (digits_only,))
         results = cursor.fetchall()
 
     conn.close()
     return results
 
-
-def log_to_google_sheet(brand: str, category: str, sku: str, finish: str, mrp: str, desc: str, scan_type: str):
+def log_to_google_sheet(brand, category, series, sku, finish, mrp, desc, scan_type):
     if "YOUR_COPIED" not in GOOGLE_SHEET_WEBHOOK_URL and GOOGLE_SHEET_WEBHOOK_URL.startswith("http"):
         try:
             payload = {
                 "brand": brand,
                 "category": category,
+                "series": series,
                 "sku": sku,
                 "finish": finish,
                 "mrp": mrp,
@@ -73,17 +93,18 @@ def log_to_google_sheet(brand: str, category: str, sku: str, finish: str, mrp: s
             }
             requests.post(GOOGLE_SHEET_WEBHOOK_URL, json=payload, timeout=3)
         except Exception as e:
-            print(f"Google Sheet Logging Exception: {e}")
-
+            print(f"Sheet Logging Error: {e}")
 
 @app.get("/")
 def home():
-    return {"status": "online", "message": "Catalog Scanner API active"}
-
+    return {
+        "status": "online",
+        "message": "Master Catalog Scanner API connected to PostgreSQL pgAdmin DB"
+    }
 
 @app.get("/scan")
-def scan_text_sku(sku: str = Query(..., description="Target SKU or Cat. No.")):
-    results = query_db_sku_variants(sku)
+def scan_product(sku: str = Query(..., description="Target Product Code or Barcode ID")):
+    results = query_master_catalog(sku)
 
     if results:
         variants = []
@@ -91,25 +112,26 @@ def scan_text_sku(sku: str = Query(..., description="Target SKU or Cat. No.")):
             variants.append({
                 "brand": r[0],
                 "category": r[1],
-                "sku_cat_no": r[2],
-                "finish_code": r[3],
-                "finish_name": r[4],
-                "mrp_inr": f"₹{r[5]:,.2f}",
-                "description": r[6] or "",
-                "page_no": r[7],
-                "source_catalog": r[8]
+                "series": r[2] or "General",
+                "sku_cat_no": r[3],
+                "finish_code": r[4],
+                "finish_name": r[5],
+                "mrp_inr": f"₹{float(r[6]):,.2f}",
+                "description": r[7] or "",
+                "page_no": r[8],
+                "source_catalog": r[9]
             })
 
-        # Log primary matching item to Google Sheets
         top_match = variants[0]
         log_to_google_sheet(
             brand=top_match["brand"],
             category=top_match["category"],
+            series=top_match["series"],
             sku=top_match["sku_cat_no"],
             finish=top_match["finish_name"],
             mrp=top_match["mrp_inr"],
             desc=top_match["description"],
-            scan_type="Camera Scan"
+            scan_type="Camera Web Scan"
         )
 
         return {
@@ -120,3 +142,7 @@ def scan_text_sku(sku: str = Query(..., description="Target SKU or Cat. No.")):
         }
     else:
         raise HTTPException(status_code=404, detail=f"No item found matching SKU: '{sku}'")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app:app", host="0.0.0.0", port=8001, reload=True)
