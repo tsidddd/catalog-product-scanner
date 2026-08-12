@@ -45,36 +45,19 @@ def query_db_sku(clean_sku: str):
     conn = sqlite3.connect("master_products.db")
     cursor = conn.cursor()
 
-    sku_candidates = sanitize_sku(clean_sku)
-    results = []
-
-    # 1. Try exact matches for all candidates (original and stripped variations)
-    for candidate in sku_candidates:
-        cursor.execute("""
-            SELECT brand, category, sku_cat_no, mrp_inr, description, page_no, source_file 
-            FROM products 
-            WHERE UPPER(sku_cat_no) = ?
-        """, (candidate,))
-        results = cursor.fetchall()
-        if results:
-            break
-
-    # 2. Wildcard fallback if exact candidate search returns empty
-    if not results:
-        for candidate in sku_candidates:
-            cursor.execute("""
-                SELECT brand, category, sku_cat_no, mrp_inr, description, page_no, source_file 
-                FROM products 
-                WHERE UPPER(sku_cat_no) LIKE ?
-                LIMIT 1
-            """, (f"%{candidate}%",))
-            results = cursor.fetchall()
-            if results:
-                break
-
+    clean = clean_sku.strip().upper()
+    
+    # Query SQLite using the JSON Search Variations Index
+    cursor.execute("""
+        SELECT brand, category, sku_cat_no, finish_code, finish_name, mrp_inr, description, page_no, source_file 
+        FROM products 
+        WHERE search_variations LIKE ? OR UPPER(sku_cat_no) = ? OR UPPER(base_model_code) = ?
+        LIMIT 1
+    """, (f'%"{clean}"%', clean, clean))
+    
+    results = cursor.fetchall()
     conn.close()
     return results
-
 
 def log_to_google_sheet(brand: str, category: str, sku: str, mrp: str, desc: str, scan_type: str):
     if "YOUR_COPIED" not in GOOGLE_SHEET_WEBHOOK_URL and GOOGLE_SHEET_WEBHOOK_URL.startswith("http"):
