@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Catalog Product Scanner</title>
+    <title>Master Catalog Product Scanner</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: white; margin: 0; padding: 15px; text-align: center; }
@@ -13,12 +13,14 @@
         .btn-purple { background: #8b5cf6; }
         input[type="file"] { display: none; }
         canvas { display: none; }
+        
         .divider { margin: 20px 0 15px 0; border-bottom: 1px solid #334155; position: relative; }
         .divider span { background: #1e293b; padding: 0 10px; color: #94a3b8; font-size: 13px; font-weight: bold; position: relative; top: -10px; }
         
-        .variant-card { background: #0f172a; border-left: 5px solid #38bdf8; padding: 12px; text-align: left; margin-top: 10px; border-radius: 8px; }
-        .price-tag { font-size: 20px; color: #4ade80; font-weight: bold; margin: 4px 0; }
+        .variant-card { background: #0f172a; border-left: 5px solid #38bdf8; padding: 14px; text-align: left; margin-top: 12px; border-radius: 8px; }
+        .price-tag { font-size: 22px; color: #4ade80; font-weight: bold; margin: 6px 0; }
         .badge { background: #0369a1; color: white; font-size: 11px; font-weight: bold; padding: 3px 8px; border-radius: 4px; display: inline-block; margin-right: 4px; }
+        .series-badge { background: #6366f1; color: white; font-size: 11px; font-weight: bold; padding: 3px 8px; border-radius: 4px; display: inline-block; margin-right: 4px; }
         .finish-badge { background: #d97706; color: white; font-size: 11px; font-weight: bold; padding: 3px 8px; border-radius: 4px; display: inline-block; }
     </style>
 </head>
@@ -38,21 +40,21 @@
         <span>OR MANUAL SKU LOOKUP</span>
     </div>
 
-    <input type="text" id="manualSku" placeholder="Type CERA or ESSCO Code (e.g. S1013265VS, KIO-1110118)" style="width: 100%; padding: 12px; font-size: 16px; border: 1px solid #334155; background: #0f172a; color: white; border-radius: 8px; box-sizing: border-box;">
+    <input type="text" id="manualSku" placeholder="Type Product Code (e.g. KIO-1110118, S1013265VS)" style="width: 100%; padding: 12px; font-size: 16px; border: 1px solid #334155; background: #0f172a; color: white; border-radius: 8px; box-sizing: border-box;">
     <button class="btn" onclick="searchManual()">Search Code</button>
 
     <div id="output"></div>
 </div>
 
 <script>
-const BACKEND_URL = "https://catalog-scanner-api.onrender.com"; // Your Render live backend URL
+const BACKEND_URL = "https://catalog-scanner-api.onrender.com"; // Render API URL
 
 async function processUploadedPhoto() {
     const input = document.getElementById('fileInput');
     if (!input.files || !input.files[0]) return;
 
     const outputDiv = document.getElementById('output');
-    outputDiv.innerHTML = "<p style='color:#38bdf8;'>Processing image...</p>";
+    outputDiv.innerHTML = "<p style='color:#38bdf8;'>Processing photo...</p>";
 
     const img = new Image();
     img.src = URL.createObjectURL(input.files[0]);
@@ -63,7 +65,7 @@ async function processUploadedPhoto() {
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0);
 
-        outputDiv.innerHTML = "<p style='color:#38bdf8;'>Scanning barcode / text...</p>";
+        outputDiv.innerHTML = "<p style='color:#38bdf8;'>Running OCR scan...</p>";
         runOcrAndSearch(canvas);
     };
 }
@@ -76,19 +78,20 @@ async function runOcrAndSearch(canvas) {
         await worker.terminate();
 
         const ocrText = ret.data.text;
-        // Match CERA full codes or ESSCO barcode capital codes
-        const skuPattern = /\b([A-Z0-9]{2,5}-[A-Z0-9-]{3,18}|[SFEABSP][0-9]{7,8}[A-Z0-9]*)\b/gi;
+        
+        // Multi-family SKU regex
+        const skuPattern = /\b([A-Z0-9]{2,5}-[A-Z0-9-]{3,18}|[SFEABSP][0-9]{6,10}[A-Z0-9]*)\b/gi;
         const matches = ocrText.match(skuPattern);
 
         if (matches && matches.length > 0) {
             const detectedSku = matches[0].trim().toUpperCase();
-            outputDiv.innerHTML = `<p style='color:#4ade80;'>Detected: <strong>${detectedSku}</strong>. Fetching all variants...</p>`;
+            outputDiv.innerHTML = `<p style='color:#4ade80;'>Detected: <strong>${detectedSku}</strong>. Querying PostgreSQL...</p>`;
             queryBackend(detectedSku);
         } else {
-            outputDiv.innerHTML = "<p style='color:#f87171;'>No code detected. Position tag clearly in photo.</p>";
+            outputDiv.innerHTML = "<p style='color:#f87171;'>No code detected. Position label clearly in picture.</p>";
         }
     } catch (err) {
-        outputDiv.innerHTML = "<p style='color:#f87171;'>OCR scan error. Try manual search below.</p>";
+        outputDiv.innerHTML = "<p style='color:#f87171;'>OCR scan failed. Try typing code manually below.</p>";
     }
 }
 
@@ -106,27 +109,28 @@ async function queryBackend(skuQuery) {
         const data = await res.json();
         renderResult(data);
     } catch (e) {
-        outputDiv.innerHTML = `<p style='color:#f87171;'>Product SKU '${skuQuery}' not found in database.</p>`;
+        outputDiv.innerHTML = `<p style='color:#f87171;'>Product code '${skuQuery}' not found in database.</p>`;
     }
 }
 
 function renderResult(data) {
     const outputDiv = document.getElementById('output');
     if (data.status === "success" && data.products.length > 0) {
-        let html = `<p style="color:#4ade80; margin-bottom:10px;">Found ${data.total_variants_found} Finish Variant(s) for '${data.searched_sku}'</p>`;
+        let html = `<p style="color:#4ade80; margin-bottom:10px;">Found ${data.total_variants_found} Match(es) for '${data.searched_sku}'</p>`;
         
         data.products.forEach((p, idx) => {
             html += `
                 <div class="variant-card">
                     <div>
                         <span class="badge">${p.brand}</span>
-                        <span class="finish-badge">${p.finish_name} (${p.finish_code})</span>
+                        <span class="series-badge">${p.category}</span>
+                        <span class="finish-badge">${p.series}</span>
                     </div>
-                    <h3 style="margin: 6px 0; color:#38bdf8;">SKU: ${p.sku_cat_no}</h3>
+                    <h3 style="margin: 8px 0; color:#38bdf8;">SKU: ${p.sku_cat_no}</h3>
                     <div class="price-tag">MRP: ${p.mrp_inr}</div>
-                    <small style="color:#cbd5e1;">${p.description}</small><br>
-                    <small style="color:#64748b;">Page ${p.page_no} (${p.source_catalog})</small>
-                    ${idx === 0 ? '<br><span style="color:#4ade80; font-size:11px; font-weight:bold;">✅ Logged to Google Sheet</span>' : ''}
+                    <p style="color:#cbd5e1; margin: 4px 0;"><strong>Finish:</strong> ${p.finish_name} (${p.finish_code})</p>
+                    <small style="color:#64748b;">Source: Page ${p.page_no} (${p.source_catalog})</small>
+                    ${idx === 0 ? '<br><span style="color:#4ade80; font-size:11px; font-weight:bold; display:inline-block; margin-top:6px;">✅ Logged to Google Sheet</span>' : ''}
                 </div>
             `;
         });
