@@ -15,7 +15,7 @@ app.add_middleware(
 )
 
 # Paste your Google Apps Script URL below
-GOOGLE_SHEET_WEBHOOK_URL = "YOUR_COPIED_GOOGLE_APPS_SCRIPT_URL_HERE"
+GOOGLE_SHEET_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbyNBzXCgogYweXJk6UH40hnvGe_cQ4GVjzLthLkYj0SZ4J3aUTo_W-fZ18K2JDx08s4/exec"
 
 
 def query_db_sku(raw_sku: str):
