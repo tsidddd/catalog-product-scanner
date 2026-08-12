@@ -13,10 +13,8 @@
         .btn-purple { background: #8b5cf6; }
         input[type="file"] { display: none; }
         canvas { display: none; }
-        
         .divider { margin: 20px 0 15px 0; border-bottom: 1px solid #334155; position: relative; }
         .divider span { background: #1e293b; padding: 0 10px; color: #94a3b8; font-size: 13px; font-weight: bold; position: relative; top: -10px; }
-        
         .result-card { background: #0f172a; border-left: 6px solid #16a34a; padding: 15px; text-align: left; margin-top: 15px; border-radius: 8px; }
         .price-tag { font-size: 24px; color: #4ade80; font-weight: bold; margin: 5px 0; }
         .badge { background: #0369a1; color: white; font-size: 11px; font-weight: bold; padding: 3px 8px; border-radius: 4px; display: inline-block; margin-right: 4px; }
@@ -52,7 +50,7 @@ async function processUploadedPhoto() {
     if (!input.files || !input.files[0]) return;
 
     const outputDiv = document.getElementById('output');
-    outputDiv.innerHTML = "<p style='color:#38bdf8;'>Processing high-res photo...</p>";
+    outputDiv.innerHTML = "<p style='color:#38bdf8;'>Processing photo...</p>";
 
     const img = new Image();
     img.src = URL.createObjectURL(input.files[0]);
@@ -63,22 +61,9 @@ async function processUploadedPhoto() {
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0);
 
-        enhanceCanvas(ctx, canvas.width, canvas.height);
-
         outputDiv.innerHTML = "<p style='color:#38bdf8;'>Running OCR scan...</p>";
         runOcrAndSearch(canvas);
     };
-}
-
-function enhanceCanvas(ctx, width, height) {
-    const imgData = ctx.getImageData(0, 0, width, height);
-    const d = imgData.data;
-    for (let i = 0; i < d.length; i += 4) {
-        let v = (d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114);
-        v = v > 110 ? 255 : 0;
-        d[i] = d[i+1] = d[i+2] = v;
-    }
-    ctx.putImageData(imgData, 0, 0);
 }
 
 async function runOcrAndSearch(canvas) {
@@ -89,20 +74,18 @@ async function runOcrAndSearch(canvas) {
         await worker.terminate();
 
         const ocrText = ret.data.text;
-        
-        // Match SKUs including finish codes like KIO-CHR-1110118 or AEC-1111N
         const skuPattern = /\b([A-Z0-9]{2,5}-[A-Z0-9-]{3,18}|[SFEABSP][0-9]{7,8}[A-Z0-9]*)\b/gi;
         const matches = ocrText.match(skuPattern);
 
         if (matches && matches.length > 0) {
             const detectedSku = matches[0].trim().toUpperCase();
-            outputDiv.innerHTML = `<p style='color:#4ade80;'>Detected: <strong>${detectedSku}</strong>. Querying database...</p>`;
+            outputDiv.innerHTML = `<p style='color:#4ade80;'>Detected SKU: <strong>${detectedSku}</strong>. Searching...</p>`;
             queryBackend(detectedSku);
         } else {
-            outputDiv.innerHTML = "<p style='color:#f87171;'>No SKU code detected. Hold camera closer to the printed tag.</p>";
+            outputDiv.innerHTML = "<p style='color:#f87171;'>No SKU code recognized. Position tag clearly in photo.</p>";
         }
     } catch (err) {
-        outputDiv.innerHTML = "<p style='color:#f87171;'>OCR processing failed. Try manual typing below.</p>";
+        outputDiv.innerHTML = "<p style='color:#f87171;'>OCR scan error. Try manual search below.</p>";
     }
 }
 
@@ -138,7 +121,7 @@ function renderResult(data) {
                 <div class="price-tag">MRP: ${p.mrp_inr}</div>
                 <p style="color:#cbd5e1;"><strong>Specs:</strong> ${p.description}</p>
                 <small style="color:#64748b;">Source: ${p.source_catalog} (Page ${p.page_no})</small><br>
-                <p style="color:#4ade80; font-size:12px; font-weight:bold; margin-top:8px;">✅ Automatically Logged to Google Sheet</p>
+                <p style="color:#4ade80; font-size:12px; font-weight:bold; margin-top:8px;">✅ Logged to Google Sheet</p>
             </div>
         `;
     }
